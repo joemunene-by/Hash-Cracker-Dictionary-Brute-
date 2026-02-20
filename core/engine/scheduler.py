@@ -5,9 +5,11 @@ Manages task distribution and scheduling for efficient resource utilization
 across multiple worker processes in the cracking engine.
 """
 
+import bisect
 import time
+from collections import deque
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -36,51 +38,53 @@ class TaskScheduler:
     def create_task(self, work_chunk: List[str], priority: int = 0) -> str:
         """
         Create a new task.
-        
+
         Args:
             work_chunk: List of password candidates for this task
             priority: Task priority (higher = more important)
-            
+
         Returns:
             Task ID
         """
         task_id = f"task_{self.total_tasks_created}"
         self.total_tasks_created += 1
-        
+
         task = Task(
             task_id=task_id,
             priority=priority,
             work_chunk=work_chunk,
             created_time=time.time()
         )
-        
+
         self.tasks[task_id] = task
-        self.task_queue.append(task_id)
-        
-        # Sort queue by priority (highest first)
-        self.task_queue.sort(key=lambda tid: self.tasks[tid].priority, reverse=True)
-        
+
+        # Use bisect to insert in O(log n) instead of re-sorting the
+        # entire queue in O(n log n) on every insert.  The queue is kept
+        # in *ascending* priority order so that pop() (O(1) from the end)
+        # returns the highest-priority task.
+        bisect.insort(self.task_queue, (priority, task_id))
+
         return task_id
     
     def assign_task(self, worker_id: int) -> Optional[str]:
         """
         Assign the next available task to a worker.
-        
+
         Args:
             worker_id: ID of the worker requesting a task
-            
+
         Returns:
             Task ID if available, None if no tasks remaining
         """
         if not self.task_queue:
             return None
-        
+
         # Check if worker already has a task
         if worker_id in self.worker_assignments:
             return self.worker_assignments[worker_id]
-        
-        # Get next task
-        task_id = self.task_queue.pop(0)
+
+        # Pop the highest-priority item from the end (O(1))
+        _priority, task_id = self.task_queue.pop()
         task = self.tasks[task_id]
         
         # Assign to worker
@@ -141,37 +145,46 @@ class TaskScheduler:
     def get_stats(self) -> Dict[str, Any]:
         """
         Get scheduler statistics.
-        
+
         Returns:
             Dictionary containing scheduler statistics
         """
         current_time = time.time()
-        
-        # Calculate task statistics
+
         pending_tasks = len(self.task_queue)
         active_tasks = len(self.worker_assignments)
-        completed_tasks = len(self.completed_tasks)
-        
+        completed_count_total = len(self.completed_tasks)
+
         # Calculate average task duration
-        total_duration = 0
+        total_duration = 0.0
         completed_count = 0
-        
+
         for task_id in self.completed_tasks:
             task = self.tasks[task_id]
             if task.start_time and task.end_time:
                 total_duration += task.end_time - task.start_time
                 completed_count += 1
-        
+
         avg_duration = total_duration / completed_count if completed_count > 0 else 0
-        
+
+        # Compute tasks_per_second safely
+        if self.completed_tasks:
+            earliest_time = min(
+                self.tasks[tid].created_time for tid in self.completed_tasks
+            )
+            elapsed = max(1.0, current_time - earliest_time)
+            tasks_per_second = completed_count_total / elapsed
+        else:
+            tasks_per_second = 0.0
+
         return {
             'total_tasks_created': self.total_tasks_created,
             'pending_tasks': pending_tasks,
             'active_tasks': active_tasks,
-            'completed_tasks': completed_tasks,
+            'completed_tasks': completed_count_total,
             'workers_assigned': len(self.worker_assignments),
             'average_task_duration': avg_duration,
-            'tasks_per_second': completed_tasks / max(1, current_time - (self.tasks[min(self.completed_tasks, key=lambda tid: self.tasks[tid].created_time)].created_time if self.completed_tasks else current_time))
+            'tasks_per_second': tasks_per_second,
         }
     
     def reset(self):

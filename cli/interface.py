@@ -333,22 +333,24 @@ class HashAuditCLI:
             # Multiple hashes from file
             self._crack_hash_file(args.hash_file, hash_algorithm, attack_strategy, engine, args)
     
+    # Map algorithm names to their classes so we only instantiate the one
+    # that is actually requested, instead of eagerly constructing all seven.
+    _ALGORITHM_CLASSES = {
+        'md5': MD5Hash,
+        'sha1': SHA1Hash,
+        'sha256': SHA256Hash,
+        'sha512': SHA512Hash,
+        'ntlm': NTLMHash,
+        'bcrypt': BcryptHash,
+        'pbkdf2': PBKDF2Hash,
+    }
+
     def _get_hash_algorithm(self, algorithm_type: str):
         """Get hash algorithm instance."""
-        algorithms = {
-            'md5': MD5Hash(),
-            'sha1': SHA1Hash(),
-            'sha256': SHA256Hash(),
-            'sha512': SHA512Hash(),
-            'ntlm': NTLMHash(),
-            'bcrypt': BcryptHash(),
-            'pbkdf2': PBKDF2Hash()
-        }
-        
-        if algorithm_type not in algorithms:
+        cls = self._ALGORITHM_CLASSES.get(algorithm_type)
+        if cls is None:
             raise ValueError(f"Unsupported algorithm: {algorithm_type}")
-        
-        return algorithms[algorithm_type]
+        return cls()
     
     def _get_attack_strategy(self, args, hash_algorithm):
         """Get attack strategy instance."""

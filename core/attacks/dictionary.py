@@ -14,8 +14,15 @@ from ..hashes.base import HashAlgorithm
 
 class DictionaryAttack(AttackStrategy):
     """Dictionary attack strategy implementation."""
-    
-    def __init__(self, hash_algorithm: HashAlgorithm, wordlist_path: str, 
+
+    # Pre-built translate table for leetspeak – avoids rebuilding per call
+    _LEET_TABLE = str.maketrans({
+        'a': '@', 'e': '3', 'i': '1', 'o': '0', 's': '$',
+        't': '7', 'l': '1', 'A': '@', 'E': '3', 'I': '1',
+        'O': '0', 'S': '$', 'T': '7', 'L': '1',
+    })
+
+    def __init__(self, hash_algorithm: HashAlgorithm, wordlist_path: str,
                  apply_rules: bool = True):
         super().__init__("Dictionary Attack", hash_algorithm)
         self.wordlist_path = wordlist_path
@@ -26,29 +33,38 @@ class DictionaryAttack(AttackStrategy):
     def generate_candidates(self) -> Iterator[str]:
         """
         Generate password candidates from wordlist.
-        
+
+        Yields unique candidates only – a lightweight set tracks what has
+        already been yielded so duplicate base words and mutations that
+        collide (e.g. "password".lower() == "password") are skipped.
+
         Yields:
             Password candidate strings with optional mutations
         """
         if not os.path.exists(self.wordlist_path):
             raise FileNotFoundError(f"Wordlist not found: {self.wordlist_path}")
-        
+
+        seen: set = set()
+
         try:
             with open(self.wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line_num, line in enumerate(f):
+                for line in f:
                     candidate = line.strip()
                     if not candidate:
                         continue
-                    
-                    # Original candidate
-                    yield candidate
-                    
-                    # Apply mutations if enabled
+
+                    if candidate not in seen:
+                        seen.add(candidate)
+                        yield candidate
+
                     if self.apply_rules:
-                        yield from self._apply_mutations(candidate)
-                    
+                        for mutation in self._apply_mutations(candidate):
+                            if mutation not in seen:
+                                seen.add(mutation)
+                                yield mutation
+
                     self.wordlist_size += 1
-                    
+
         except IOError as e:
             raise IOError(f"Error reading wordlist: {e}")
     
@@ -75,17 +91,8 @@ class DictionaryAttack(AttackStrategy):
         for prefix in ['1', '12', '123']:
             yield prefix + candidate
         
-        # Leetspeak substitutions
-        leet_map = {
-            'a': '@', 'e': '3', 'i': '1', 'o': '0', 's': '$',
-            't': '7', 'l': '1', 'A': '@', 'E': '3', 'I': '1',
-            'O': '0', 'S': '$', 'T': '7', 'L': '1'
-        }
-        
-        leet_candidate = candidate
-        for char, replacement in leet_map.items():
-            leet_candidate = leet_candidate.replace(char, replacement)
-        
+        # Leetspeak substitutions – single O(n) translate call
+        leet_candidate = candidate.translate(self._LEET_TABLE)
         if leet_candidate != candidate:
             yield leet_candidate
         

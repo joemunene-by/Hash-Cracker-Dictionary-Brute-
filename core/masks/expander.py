@@ -6,33 +6,37 @@ all possible combinations for brute-force attacks.
 """
 
 import itertools
+import math
 from typing import Iterator, List, Dict, Any
 from .parser import MaskParser
 
 
 class MaskExpander:
     """Expands mask patterns into character combinations."""
-    
+
     def __init__(self):
         self.parser = MaskParser()
-    
+        # Cache parsed mask results to avoid re-parsing the same mask
+        self._parse_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _get_parsed(self, mask: str) -> Dict[str, Any]:
+        """Return cached parse result for *mask*."""
+        if mask not in self._parse_cache:
+            self._parse_cache[mask] = self.parser.parse_mask(mask)
+        return self._parse_cache[mask]
+
     def expand_mask(self, mask: str) -> List[str]:
         """
         Expand mask into list of character sets.
-        
+
         Args:
             mask: Mask pattern to expand
-            
+
         Returns:
             List of character sets for each position
         """
-        parsed = self.parser.parse_mask(mask)
-        char_sets = []
-        
-        for component in parsed['components']:
-            char_sets.append(component['character_set'])
-        
-        return char_sets
+        parsed = self._get_parsed(mask)
+        return [component['character_set'] for component in parsed['components']]
     
     def generate_combinations(self, mask: str, max_combinations: int = None) -> Iterator[str]:
         """
@@ -108,14 +112,11 @@ class MaskExpander:
             Dictionary with complexity analysis
         """
         try:
-            parsed = self.parser.parse_mask(mask)
+            parsed = self._get_parsed(mask)
             char_sets = self.expand_mask(mask)
-            
+
             # Calculate entropy
-            total_entropy = 0
-            for char_set in char_sets:
-                import math
-                total_entropy += math.log2(len(char_set))
+            total_entropy = sum(math.log2(len(cs)) for cs in char_sets)
             
             # Analyze character distribution
             char_type_counts = {
@@ -164,9 +165,8 @@ class MaskExpander:
             Complexity score (0-100)
         """
         score = 0.0
-        
+
         # Base score from combinations (logarithmic scale)
-        import math
         if parsed['total_combinations'] > 0:
             score += min(50, math.log10(parsed['total_combinations']))
         

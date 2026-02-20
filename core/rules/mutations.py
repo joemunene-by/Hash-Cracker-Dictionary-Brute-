@@ -18,12 +18,20 @@ class MutationRules:
             'a': '@', 'e': '3', 'i': '1', 'o': '0', 's': '$', 't': '7',
             'l': '1', 'g': '9', 'b': '8', 'z': '2', 'c': '(', 'd': ')'
         }
-        
+
+        # Pre-build a str.maketrans table for full leetspeak conversion –
+        # this is O(n) per call instead of O(n * k) for k replace() calls.
+        _leet_trans = {}
+        for ch, sub in self.leet_substitutions.items():
+            _leet_trans[ord(ch)] = sub
+            _leet_trans[ord(ch.upper())] = sub
+        self._leet_translate_table = _leet_trans
+
         # Common prefixes and suffixes
         self.prefixes = ['', 'x', 'xx', '1', '12', '123', 'admin', 'root']
-        self.suffixes = ['', '1', '12', '123', '1234', '2023', '2024', '2025', 
+        self.suffixes = ['', '1', '12', '123', '1234', '2023', '2024', '2025',
                         '!', '@', '#', '$', '%', '&', '*', '.', '_']
-        
+
         # Case variations
         self.case_patterns = [
             lambda x: x.lower(),
@@ -62,31 +70,34 @@ class MutationRules:
                 if mutation_count >= max_mutations:
                     return
         
-        # Leetspeak substitutions
-        yield from self._apply_leetspeak(word, max_mutations - mutation_count)
-        mutation_count += len(list(self._apply_leetspeak(word, max_mutations - mutation_count)))
-        if mutation_count >= max_mutations:
-            return
-        
+        # Leetspeak substitutions – iterate once, counting as we yield
+        for leet_variant in self._apply_leetspeak(word, max_mutations - mutation_count):
+            yield leet_variant
+            mutation_count += 1
+            if mutation_count >= max_mutations:
+                return
+
         # Prefix and suffix combinations
         yield from self._apply_prefix_suffix(word, max_mutations - mutation_count)
     
     def _apply_leetspeak(self, word: str, max_mutations: int) -> Iterator[str]:
         """Apply leetspeak substitutions."""
-        # Full substitution
-        leet_word = word
-        for char, sub in self.leet_substitutions.items():
-            leet_word = leet_word.replace(char, sub)
-            leet_word = leet_word.replace(char.upper(), sub)
-        
+        # Full substitution – single O(n) translate call
+        leet_word = word.translate(self._leet_translate_table)
+
         if leet_word != word:
             yield leet_word
-        
-        # Partial substitutions (combinations)
+
+        # Partial substitutions (combinations) – deduplicate chars first
         if max_mutations > 1:
-            chars_to_substitute = [c for c in word.lower() if c in self.leet_substitutions]
+            seen_chars = set()
+            chars_to_substitute = []
+            for c in word.lower():
+                if c in self.leet_substitutions and c not in seen_chars:
+                    seen_chars.add(c)
+                    chars_to_substitute.append(c)
+
             if len(chars_to_substitute) >= 2:
-                # Try substituting different combinations
                 for r in range(1, min(3, len(chars_to_substitute))):
                     for combo in itertools.combinations(chars_to_substitute, r):
                         variant = word

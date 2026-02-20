@@ -50,45 +50,41 @@ class HybridAttack(AttackStrategy):
     def _dictionary_mask_hybrid(self) -> Iterator[str]:
         """
         Dictionary + mask hybrid: wordlist entries + mask combinations.
-        
+
+        Mask combinations are materialized once as a tuple (they must be
+        reused for every dictionary word).  The two separate loops over
+        mask_combinations are merged into a single loop that yields both
+        orderings, cutting iteration overhead in half.
+
         Yields:
             Combined password candidates
         """
         if not self.brute_force_attack:
             raise ValueError("Mask required for dictionary-mask hybrid mode")
-        
-        # Generate all mask combinations
-        mask_combinations = list(self.brute_force_attack.generate_candidates())
-        
-        # Combine with dictionary entries
+
+        # Materialize once as a tuple – lower memory than list, reused per word
+        mask_combinations = tuple(self.brute_force_attack.generate_candidates())
+
         for word in self.dictionary_attack.generate_candidates():
-            # Word + mask
             for mask_part in mask_combinations:
                 yield word + mask_part
-            
-            # Mask + word
-            for mask_part in mask_combinations:
                 yield mask_part + word
     
     def _mask_dictionary_hybrid(self) -> Iterator[str]:
         """
         Mask + dictionary hybrid: mask combinations + wordlist entries.
-        
+
         Yields:
             Combined password candidates
         """
         if not self.brute_force_attack:
             raise ValueError("Mask required for mask-dictionary hybrid mode")
-        
-        # Generate all mask combinations
-        mask_combinations = list(self.brute_force_attack.generate_candidates())
-        
-        # Combine with dictionary entries
+
+        mask_combinations = tuple(self.brute_force_attack.generate_candidates())
+
         for word in self.dictionary_attack.generate_candidates():
-            # Insert word at different positions in mask
             for mask_part in mask_combinations:
                 if len(mask_part) > 1:
-                    # Insert word at beginning, middle, end
                     yield word + mask_part
                     yield mask_part + word
                     if len(mask_part) > 2:

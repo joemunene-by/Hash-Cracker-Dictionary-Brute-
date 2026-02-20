@@ -110,29 +110,38 @@ class CommonPasswordRules:
     
     @classmethod
     def leetspeak_variations(cls, word: str) -> Iterator[str]:
-        """Generate leetspeak variations."""
-        # Full substitution
+        """Generate leetspeak variations.
+
+        Produces a full-substitution variant (first replacement for each
+        char) followed by per-character partial substitutions, deduplicating
+        results to avoid wasted hash attempts.
+        """
+        seen: set = set()
+
+        # Full substitution – use the first replacement for each mapped char
         leet_word = word
         for char, replacements in cls.LEET_MAP.items():
-            for replacement in replacements:
-                leet_word = leet_word.replace(char, replacement)
-        
-        if leet_word != word:
+            leet_word = leet_word.replace(char, replacements[0])
+        if leet_word != word and leet_word not in seen:
+            seen.add(leet_word)
             yield leet_word
-        
-        # Partial substitutions (single character)
-        for char, replacements in cls.LEET_MAP.items():
-            if char in word:
-                for replacement in replacements:
-                    yield word.replace(char, replacement)
-        
-        # Case-insensitive substitutions
+
+        # Per-character substitutions (case-insensitive) – single pass
         lower_word = word.lower()
         for char, replacements in cls.LEET_MAP.items():
-            if char in lower_word:
+            lc = char.lower()
+            if lc in lower_word:
                 for replacement in replacements:
-                    yield word.replace(char, replacement)
-                    yield word.replace(char.upper(), replacement)
+                    variant = word.replace(char, replacement)
+                    if variant != word and variant not in seen:
+                        seen.add(variant)
+                        yield variant
+                    uc = char.upper()
+                    if uc != char:
+                        variant = word.replace(uc, replacement)
+                        if variant != word and variant not in seen:
+                            seen.add(variant)
+                            yield variant
     
     @classmethod
     def reverse_word(cls, word: str) -> Iterator[str]:

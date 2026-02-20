@@ -6,8 +6,9 @@ progress tracking and result reporting for hash cracking operations.
 """
 
 import time
+import itertools
 import multiprocessing as mp
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Iterator
 from ..hashes.base import HashAlgorithm
 from ..attacks.base import AttackStrategy
 from .scheduler import TaskScheduler
@@ -105,18 +106,19 @@ class CrackingEngine:
         
         try:
             while any(worker.is_alive() for worker in workers):
-                # Check for results
-                if not self._result_queue.empty():
-                    result = self._result_queue.get()
+                # Drain result queue using blocking get with timeout instead
+                # of busy-wait polling – avoids wasting CPU cycles on sleep.
+                try:
+                    result = self._result_queue.get(timeout=0.05)
                     if result['found']:
                         # Password found!
                         self._stop_event.set()
                         elapsed_time = time.time() - start_time
-                        
+
                         # Wait for workers to finish
                         for worker in workers:
                             worker.join(timeout=1.0)
-                        
+
                         return CrackingResult(
                             success=True,
                             password=result['password'],
@@ -125,27 +127,31 @@ class CrackingEngine:
                             strategy=attack_strategy.name,
                             algorithm=hash_algorithm.name
                         )
-                
-                # Update progress
-                if not self._stats_queue.empty():
-                    stats = self._stats_queue.get()
-                    total_attempts += stats.get('attempts', 0)
-                    
-                    # Call progress callback if provided
-                    if self.progress_callback and time.time() - last_progress_time > 0.5:
-                        self.progress_callback({
-                            'attempts': total_attempts,
-                            'elapsed_time': time.time() - start_time,
-                            'workers_active': sum(1 for w in workers if w.is_alive())
-                        })
-                        last_progress_time = time.time()
-                
+                except Exception:
+                    pass  # Queue empty – continue to stats / timeout checks
+
+                # Drain all pending stats in one batch to reduce queue overhead
+                while not self._stats_queue.empty():
+                    try:
+                        stats = self._stats_queue.get_nowait()
+                        total_attempts += stats.get('attempts', 0)
+                    except Exception:
+                        break
+
+                # Call progress callback if provided
+                now = time.time()
+                if self.progress_callback and now - last_progress_time > 0.5:
+                    self.progress_callback({
+                        'attempts': total_attempts,
+                        'elapsed_time': now - start_time,
+                        'workers_active': sum(1 for w in workers if w.is_alive())
+                    })
+                    last_progress_time = now
+
                 # Check timeout
                 if timeout and (time.time() - start_time) > timeout:
                     self._stop_event.set()
                     break
-                
-                time.sleep(0.1)
         
         except KeyboardInterrupt:
             self._stop_event.set()
@@ -163,23 +169,35 @@ class CrackingEngine:
             algorithm=hash_algorithm.name
         )
     
-    def _create_work_chunks(self, attack_strategy: AttackStrategy) -> List[List[str]]:
+    def _create_work_chunks(self, attack_strategy: AttackStrategy,
+                            chunk_size: int = 50000) -> List[List[str]]:
         """
         Create work chunks for distribution to worker processes.
-        
+
+        Uses streaming chunking to avoid materializing all candidates into
+        memory at once. Candidates are read from the generator in fixed-size
+        chunks and distributed round-robin across workers.
+
         Args:
             attack_strategy: The attack strategy to chunk
-            
+            chunk_size: Maximum candidates per chunk (default 50 000)
+
         Returns:
             List of work chunks (each chunk is a list of candidates)
         """
-        candidates = list(attack_strategy.generate_candidates())
-        chunk_size = max(1, len(candidates) // self.max_workers)
-        
-        chunks = []
-        for i in range(0, len(candidates), chunk_size):
-            chunks.append(candidates[i:i + chunk_size])
-        
+        chunks: List[List[str]] = [[] for _ in range(self.max_workers)]
+        worker_idx = 0
+
+        candidate_iter = attack_strategy.generate_candidates()
+        while True:
+            batch = list(itertools.islice(candidate_iter, chunk_size))
+            if not batch:
+                break
+            chunks[worker_idx].extend(batch)
+            worker_idx = (worker_idx + 1) % self.max_workers
+
+        # Remove empty chunks (when fewer candidates than workers)
+        chunks = [c for c in chunks if c]
         return chunks if chunks else [[]]
     
     def get_engine_info(self) -> Dict[str, Any]:
